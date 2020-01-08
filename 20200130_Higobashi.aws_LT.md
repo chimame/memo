@@ -3,6 +3,16 @@
 - RDS Proxy
   - 通常時の挙動
     - RDS Proxy自体への接続数が増えた場合のRDS自体の接続数の変化
+    ```ruby
+    require 'net/http'
+    def start
+      100.times do
+        Thread.new do
+          Net::HTTP.get_response(URI.parse('http://127.0.0.1:3000/test'))
+        end
+      end
+    end
+    ```
     - RDS Proxyを介した場合と直接RDSに繋いだ場合のレイテンシーの違い
     ```ruby
     def start
@@ -27,7 +37,6 @@
       ```ruby
       require 'net/http'
       def start
-        Rails.logger.debug("start: #{Time.zone.now}")
         error_count = 0
         while true do
           begin
@@ -35,12 +44,10 @@
             raise "test error" if Net::HTTP.get_response(URI.parse('http://127.0.0.1:3000/test')).code != '200'
             break if error_count > 0
           rescue => e
-            Rails.logger.debug("error: #{e.message}")
             error_count += 1
             retry
           end
         end
-        Rails.logger.debug("end: #{Time.zone.now}")
       end
       ```
  
