@@ -200,6 +200,7 @@ app1.dynamic_call()
 まずは、以下の `index.html` を作成します。
 
 ```html:index.html
+<p><img src="https://vlang.io/img/v-logo.png">is @message</p>
 ```
 
 続いて作成した `index.html` をレンダリングするためのindexメソッドを以下のように書き換えます。
@@ -222,7 +223,7 @@ fn main() {
 
 fn (app mut App) index() {
 -	app.vweb.text('Hello, world')
-+       message := 'Hello, world'
++       message := 'awesome!!'
 +	$vweb.html()
 }
 
@@ -240,8 +241,311 @@ pub fn (app &App) reset() {}
 
 先程書いた動的メソッドの呼び出しや今回の `$vweb` なのですが、これは動的の呼び出しを記載しているわけですが、Vの特徴としてこれをコンパイル時に確定します。なので今回でいうと `index.html` のファイルが必要になりますが、もしそのファイルが存在しない場合はコンパイルエラーとなり事前にエラーを検出されます。さらには `index.html` もバイナリに含まれるためファイル検索するようなロジックが必要なくテンプレートの展開が容易に行えるといった特徴をもっています。
 
+*******ここにtemplate not foundの画像を添付*******
+
 Vの特徴を最初にあげた中で「ORMを搭載」と書きました。Webアプリケーションを作成する上でこのORMは非常に強力なものとなります。実際にORMを使用したWebアプリケーション構築例を記載していきます。
 まずは必要なデータベースを準備します。以下にPostgreSQLのデータベースおよびテーブル作成のSQLを記載します。
 
 ```sql
+create database library;
+
+\c library
+
+drop table books;
+
+create table books (
+	id serial primary key,
+	title text default '',
+	author text default ''
+);
+
+insert into books (title, author) values (
+	'Kimetsu no Yaiba',
+	'koyoharu gotoge'
+);
+
+insert into books (title, author) values (
+	'One piece',
+	'eichiro oda'
+);
 ```
+
+
+次にデータベースコネクション用の変数を定義します。同時にアプリケーション起動時データベースへ接続する処理も追加します。
+
+```diff
+module main
+
+import (
+    vweb
++   pg
+)
+
+pub struct App {
+mut:
+    vweb vweb.Context
++   db   pg.DB
+}
+
+fn main() {
+    vweb.run<App>(8080)
+}
+
+fn (app mut App) index() {
+    message := 'awesome!!'
+    $vweb.html()
+}
+
+fn (app mut App) first() {
+    app.vweb.text('Call first routing')
+}
+
+-pub fn (app &App) init() {}
++pub fn (app mut App) init() {
++  db := pg.connect(pg.Config{
++       host:   'db'
++       dbname: 'library'
++       user:   'postgres'
++   }) or { panic(err) }
++   app.db = db
++}
+pub fn (app &App) reset() {}
+```
+
+ここで初めて `init` のメソッドを使用しました。 `init` のメソッドはどのタイミングで呼ばれるかというと `main` メソッドで `vweb.run` を実行していると思いますが、そのrun内ではhttpのリッスン処理後にこの `init` 処理が呼ばれる定義となっています。ですのでここでWebアプリケーションの初期化処理を記載するとよいです。ここまで追加してWebアプリケーションが立ち上がるか一度確認してください。正常にデータベースに接続できると立ち上がるはずです。
+続いてORMに必要なStructの定義を追加するために以下のような `book.v` を作成してください。
+
+```vlang
+module main
+
+struct Book {
+    id     int
+    title  string
+    author string
+}
+
+pub fn (app &App) all_books() []Book {
+    db := app.db
+    books := db.select from Book
+    return books
+}
+```
+
+次にBookの一覧を `/` つまりindexで表示するように変更します。まずは以下のように `app.v` を変更します。
+
+```diff
+module main
+
+import (
+    vweb
+    pg
+)
+
+pub struct App {
+mut:
+    vweb vweb.Context
+    db   pg.DB
+}
+
+fn main() {
+    vweb.run<App>(8080)
+}
+
+fn (app mut App) index() {
+-   message := 'awesome!!'
++   books := app.all_books()
+    $vweb.html()
+}
+
+fn (app mut App) first() {
+    app.vweb.text('Call first routing')
+}
+
+pub fn (app mut App) init() {
+  db := pg.connect(pg.Config{
+       host:   'db'
+       dbname: 'library'
+       user:   'postgres'
+   }) or { panic(err) }
+   app.db = db
+}
+pub fn (app &App) reset() {}
+```
+
+最後に取得したBookのデータを表示するように `index.html` を変更します。
+
+```diff
+-<p><img src="https://vlang.io/img/v-logo.png">is @message</p>
++<ol>
++    @for book in books
++        <li>title: @book.title author: @book.author</li>
++    @end
++</ol>
+```
+
+ファイルの変更は以上です。最後に大事なのが起動コマンドです。今までは `v run app.v` と `app.v` をビルドのエントリーポイントとして指定してきました。しかし今回は `book.v` が必要となり、マルチエントリーポイントが必要となっています。なので起動は少し変更し `v run .` として対象のディレクトリ全体を指定して起動するようにします。起動後に `/` のindexにアクセスすると登録しているBookの一覧が表示されるはずです。
+
+*******ここにBook一覧表示の画像を添付*******
+
+今回はすべてのBookデータ一覧を表示するようにしましたが、実際には条件によってデータを絞り込む必要があるはずです。仮に絞り込み条件としてtitleに”Kimetsu no Yaiba”というものだけを一覧に表示したい場合は以下のようにデータ取得条件をSQLのようにすれば可能です。
+
+```diff
+-books := db.select from Book
++books := db.select from Book where title = 'Kimetsu no Yaiba'
+```
+
+残念なことにまだLIKE句は実装されていないのか使用することはできなかったが、大なりもしくは小なりという条件は使用可能です。
+
+今度は表示ではなく、登録ができるようにしたいと思います。
+登録用フォームを表示するためのテンプレートおよびルーティングを追加します。まずは以下のような登録フォームを記載したテンプレート `new_book.html` を準備します。
+
+```html
+<form action='/create_book' method='post'>
+    <input type='text' placeholder='Title' name='title'> <br>
+    <input type='text' placeholder='Author' name='author'></textarea>
+    <input type='submit'>
+</form>
+```
+
+次に先程作成した登録フォームテンプレートを表示するだけのためのルーティングを `app.v` に追加します。
+
+```diff
+module main
+
+import (
+    vweb
+    pg
+)
+
+pub struct App {
+mut:
+    vweb vweb.Context
+    db   pg.DB
+}
+
+fn main() {
+    vweb.run<App>(8080)
+}
+
+fn (app mut App) index() {
+    books := app.all_books()
+    $vweb.html()
+}
+
++fn (app mut App) new_book() {
++        $vweb.html()
++}
+
+fn (app mut App) first() {
+    app.vweb.text('Call first routing')
+}
+
+pub fn (app mut App) init() {
+  db := pg.connect(pg.Config{
+       host:   'db'
+       dbname: 'library'
+       user:   'postgres'
+   }) or { panic(err) }
+   app.db = db
+}
+pub fn (app &App) reset() {}
+```
+
+これを先程と一緒に `v run .` で起動し `/new_book` にアクセスすると登録フォームが表示されるはずです。
+
+*******ここに登録フォーム表示の画像を添付*******
+
+登録フォームを表示する処理まではできましたが、登録処理がまだできていません。ですので今から登録処理を作っていきたいと思います。
+まずは `book.v` に登録するためのメソッドを追加します。
+
+```diff
+module main
+
+struct Book {
+    id     int
+    title  string
+    author string
+}
+
+pub fn (app &App) all_books() []Book {
+    db := app.db
+    books := db.select from Book
+    return books
+}
+
++pub fn (app &App) insert_book(title string, author string) bool {
++    if title == '' || author == ''  {
++        return false
++    }
++    book := Book{
++        title: title
++        author: author
++    }
++    db := app.db
++    //db.insert(book) 本当はこれで動くらしいが、動かないので仕方なく↓で直接INSERT文を実行
++    db.exec_param2('insert into books (title, author) values ($1,$2)', book.title, book.author)
++    return true
++}
+```
+
+引数に `title` と `author` をもらい入力チェック後にINSERTを実行すると単純なメソッドです。しかし残念なことにプログラム内のコメントで記載している通り、本来であればORMの機能を用いてINSERTできる処理がVの不具合で動作しないらしく今回は直接SQLを発行する形となっています。
+次に登録処理を受け付けるルーティング処理を `app.v` に追加します。
+
+```diff
+module main
+
+import (
+    vweb
+    pg
+)
+
+pub struct App {
+mut:
+    vweb vweb.Context
+    db   pg.DB
+}
+
+fn main() {
+    vweb.run<App>(8080)
+}
+
+fn (app mut App) index() {
+    books := app.all_books()
+    $vweb.html()
+}
+
+fn (app mut App) new_book() {
+        $vweb.html()
+}
+
++fn (app mut App) create_book() {
++    title := app.vweb.form['title']
++    author := app.vweb.form['author']
++    if app.insert_book(title, author) {
++        app.vweb.redirect('/')
++    } else {
++    app.vweb.text('Empty title or author')
++    }
++}
+
+fn (app mut App) first() {
+    app.vweb.text('Call first routing')
+}
+
+pub fn (app mut App) init() {
+  db := pg.connect(pg.Config{
+       host:   'db'
+       dbname: 'library'
+       user:   'postgres'
+   }) or { panic(err) }
+   app.db = db
+}
+pub fn (app &App) reset() {}
+```
+
+`create_book` メソッド追加して完了です。ここの入力値を取得する処理は `app.vweb.form['title']` のように取得していますが、本来であれば `fn (app mut App) create_book(title string)` と受け取れるようになるようです。
+
+これで登録画面からtitleおよびauthorを入力することでBook一覧に入力したBookのデータが追加で表示されるようになるはずです。
+
+# VでのWebアプリケーションを構築してみて
+いかがだったでしょうか。これを書いている私自身はVという言語を初めて触ってみましたが書き心地としては悪くないなという印象です。ですが、まだまだ未完成の言語であるがゆえに色々としっかりと動作しないのが残念で仕方ありません。ただこのV自体はOSSであるため誰でも開発に参加することが可能です。発展途上の言語であるがゆえに直しどころが多くあり、コントリビューションチャンスがまだまだあると捉えることができます。ぜひ興味ある方は開発に参加して頂ければと思います。
